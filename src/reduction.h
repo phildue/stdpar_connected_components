@@ -9,7 +9,8 @@
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in all
+ * The above copyright notice and this permission notice shall be included in
+ all
  * copies or substantial portions of the Software.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
@@ -23,68 +24,78 @@
 
 #ifndef REDUCTION_H
 #define REDUCTION_H
-
+#include <semaphore>
 // ---------- Find the root of a chain ----------
 __inline__ unsigned int find_root(unsigned int *labels, unsigned int label) {
-	// Resolve Label
-	unsigned int next = labels[label];
+  // Resolve Label
+  unsigned int next = labels[label];
 
-	// Follow chain
-	while(label != next) {
-		// Move to next
-		label = next;
-		next = labels[label];
-	}
+  // Follow chain
+  while (label != next) {
+    // Move to next
+    label = next;
+    next = labels[label];
+  }
 
-	// Return label
-	return(label);
+  // Return label
+  return (label);
 }
 
 // ---------- Label Reduction ----------
-template<class AtomicMin>
-__inline__ unsigned int reduction(unsigned int *g_labels, unsigned int label1, unsigned int label2, AtomicMin atomicMin) {
-	// Get next labels
-	unsigned int next1 = (label1 != label2) ? g_labels[label1] : 0;
-	unsigned int next2 = (label1 != label2) ? g_labels[label2] : 0;
+#ifndef COMPILE_FOR_GPU
+// Drop in replacement for CUDA instruction
+__inline__ unsigned int atomicMin(unsigned int *label1, unsigned int label2) {
+  static std::binary_semaphore semaphore{1};
+  semaphore.acquire();
+  auto old = *label1;
+  *label1 = std::min({old, label2});
+  semaphore.release();
+  return old;
+}
+#endif
 
-	// Find label1
-	while((label1 != label2) && (label1 != next1)) {
-		// Adopt label
-		label1 = next1;
+__inline__ unsigned int reduction(unsigned int *g_labels, unsigned int label1,
+                                  unsigned int label2) {
+  // Get next labels
+  unsigned int next1 = (label1 != label2) ? g_labels[label1] : 0;
+  unsigned int next2 = (label1 != label2) ? g_labels[label2] : 0;
 
-		// Fetch next label
-		next1 = g_labels[label1];
-	}
+  // Find label1
+  while ((label1 != label2) && (label1 != next1)) {
+    // Adopt label
+    label1 = next1;
 
-	// Find label2
-	while((label1 != label2) && (label2 != next2)) {
-		// Adopt label
-		label2 = next2;
+    // Fetch next label
+    next1 = g_labels[label1];
+  }
 
-		// Fetch next label
-		next2 = g_labels[label2];
-	}
+  // Find label2
+  while ((label1 != label2) && (label2 != next2)) {
+    // Adopt label
+    label2 = next2;
 
-	unsigned int label3;
-	// While Labels are different
-	while(label1 != label2) {
-		// Label 2 should be smallest
-		if(label1 < label2) {
-			// Swap Labels
-			label1 = label1 ^ label2;
-			label2 = label1 ^ label2;
-			label1 = label1 ^ label2;
-		}
+    // Fetch next label
+    next2 = g_labels[label2];
+  }
 
-		// AtomicMin label1 to label2
-		
-		label3 = atomicMin(g_labels[label1], label2);
-		
-		label1 = (label1 == label3) ? label2 : label3;
-	}
+  unsigned int label3;
+  // While Labels are different
+  while (label1 != label2) {
+    // Label 2 should be smallest
+    if (label1 < label2) {
+      // Swap Labels
+      label1 = label1 ^ label2;
+      label2 = label1 ^ label2;
+      label1 = label1 ^ label2;
+    }
 
-	// Return label1
-	return(label1);
+    label3 = atomicMin(&g_labels[label1], label2);
+
+    label1 = (label1 == label3) ? label2 : label3;
+  }
+
+  // Return label1
+  return (label1);
 }
 
 #endif // REDUCTION_H
